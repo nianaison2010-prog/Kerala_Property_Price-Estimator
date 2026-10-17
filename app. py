@@ -1,0 +1,198 @@
+import numpy as np
+import pandas as pd
+from flask import Flask, render_template_string, request
+from sklearn.linear_model import LinearRegression
+
+# 1. Initialize Flask App
+app = Flask(__name__)
+
+# 2. Build a Localised Kerala Synthetic Dataset with Area (Sq. Ft.)
+np.random.seed(42)
+num_samples = 500
+
+# Base structural features
+dummy_bhk = np.random.randint(1, 5, size=num_samples)  # 1 to 4 BHK
+dummy_bathrooms = dummy_bhk + np.random.choice([0, 1], size=num_samples, p=[0.7, 0.3])
+
+# Generate realistic square footage based on BHK size
+dummy_sqft = (dummy_bhk * 700) + np.random.randint(-200, 600, size=num_samples)
+dummy_sqft = np.clip(dummy_sqft, 450, 4500)
+
+# Categorical options
+cities_pool = ['Kochi', 'Thiruvananthapuram', 'Kozhikode', 'Thrissur', 'Kottayam']
+property_types_pool = ['Apartment', 'Independent Villa', 'Traditional House']
+
+dummy_cities = np.random.choice(cities_pool, size=num_samples)
+dummy_prop_types = np.random.choice(property_types_pool, size=num_samples)
+
+# Setup pricing multipliers per location and type
+city_multipliers = {'Kochi': 1.45, 'Thiruvananthapuram': 1.25, 'Kozhikode': 1.05, 'Thrissur': 0.95, 'Kottayam': 0.80}
+type_multipliers = {'Apartment': 1.00, 'Independent Villa': 1.50, 'Traditional House': 1.20}
+
+# Calculate baseline price structure: Base price + (Sq Ft * Rate) + Layout Premium
+base_price = 1000000
+rate_per_sqft = 3500  
+
+dummy_prices = []
+for i in range(num_samples):
+    structural_value = base_price + (dummy_sqft[i] * rate_per_sqft) + (dummy_bhk[i] * 200000) + (dummy_bathrooms[i] * 100000)
+    multiplier = city_multipliers[dummy_cities[i]] * type_multipliers[dummy_prop_types[i]]
+    final_price = (structural_value * multiplier) + np.random.randint(-300000, 500000)
+    dummy_prices.append(final_price)
+
+# Constructing DataFrame
+df = pd.DataFrame({
+    'sqft': dummy_sqft,
+    'bhk': dummy_bhk,
+    'bathrooms': dummy_bathrooms,
+    'city': dummy_cities,
+    'property_type': dummy_prop_types,
+    'price_inr': dummy_prices
+})
+
+# One-Hot Encode categorical columns
+df_encoded = pd.get_dummies(df, columns=['city', 'property_type'], drop_first=False)
+
+# Separate inputs (X) and target output (y)
+X = df_encoded.drop(columns=['price_inr'])
+y = df_encoded['price_inr']
+
+feature_columns = X.columns.tolist()
+
+# Train the multi-variable model
+model = LinearRegression()
+model.fit(X.values, y.values)
+
+# Indian Currency Comma Formatting Function (Lakhs and Crores)
+def format_indian_currency(number):
+    s = str(int(round(number)))
+    if len(s) <= 3:
+        return s
+    last_three = s[-3:]
+    remaining = s[:-3]
+    remaining_fmt = ""
+    while len(remaining) > 2:
+        remaining_fmt = "," + remaining[-2:] + remaining_fmt
+        remaining = remaining[:-2]
+    if remaining:
+        remaining_fmt = remaining + remaining_fmt
+    return remaining_fmt + "," + last_three
+
+# 3. HTML Interface UI Template
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kerala Real Estate Valuation Model</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; margin: 30px auto; max-width: 500px; padding: 15px; background-color: #f1f5f9; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        h2 { color: #0f172a; margin-top: 0; text-align: center; border-bottom: 2px solid #cbd5e1; padding-bottom: 12px; font-size: 22px; }
+        .form-group { margin-bottom: 18px; }
+        label { display: block; font-weight: 600; margin-bottom: 6px; color: #334155; font-size: 14px; }
+        input[type="number"], select { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 15px; background-color: #fff; color: #334155; }
+        .btn-submit { background-color: #059669; color: white; border: none; padding: 14px; border-radius: 6px; cursor: pointer; width: 100%; font-size: 16px; font-weight: bold; margin-top: 8px;}
+        .btn-submit:hover { background-color: #047857; }
+        .result { margin-top: 20px; padding: 15px; background-color: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; border-radius: 6px; font-size: 18px; text-align: center; font-weight: bold; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Kerala Property Estimator 🏡</h2>
+        <!-- Form action explicitly points back to the main route -->
+        <form action="/" method="POST">
+            <div class="form-group">
+                <label for="city">Select City Target:</label>
+                <select id="city" name="city" required>
+                    {% for c in cities_list %}
+                    <option value="{{ c }}" {% if selected_city == c %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="property_type">Select Property Type:</label>
+                <select id="property_type" name="property_type" required>
+                    {% for p in property_types_list %}
+                    <option value="{{ p }}" {% if selected_property_type == p %}selected{% endif %}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="sqft">Built-up Area (Sq. Ft.):</label>
+                <input type="number" id="sqft" name="sqft" min="100" max="10000" step="10" value="{{ sqft or 1200 }}" required>
+            </div>
+            <div class="form-group">
+                <label for="bhk">Layout Scale (BHK / Bedrooms):</label>
+                <input type="number" id="bhk" name="bhk" min="1" max="8" step="1" value="{{ bhk or 2 }}" required>
+            </div>
+            <div class="form-group">
+                <label for="bathrooms">Number of Bathrooms:</label>
+                <input type="number" id="bathrooms" name="bathrooms" min="1" max="8" step="1" value="{{ bathrooms or 2 }}" required>
+            </div>
+            <input type="submit" class="btn-submit" value="Predict Market Valuation">
+        </form>
+
+        {% if prediction_text %}
+        <div class="result">
+            Estimated Value for {{ selected_property_type }} in {{ selected_city }}:<br>
+            <span style="font-size: 24px; color: #059669;">₹ {{ prediction_text }}</span>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
+
+# 4. App Form Evaluation Architecture
+@app.route("/", methods=["GET", "POST"])
+def index():
+    prediction_text = None
+    sqft = 1200
+    bhk = 2
+    bathrooms = 2
+    selected_city = 'Kochi'
+    selected_property_type = 'Apartment'
+
+    if request.method == "POST":
+        try:
+            sqft = int(request.form['sqft'])
+            bhk = int(request.form['bhk'])
+            bathrooms = int(request.form['bathrooms'])
+            selected_city = request.form['city']
+            selected_property_type = request.form['property_type']
+
+            input_data = {col: 0 for col in feature_columns}
+            input_data['sqft'] = sqft
+            input_data['bhk'] = bhk
+            input_data['bathrooms'] = bathrooms
+
+            city_column_key = f"city_{selected_city}"
+            if city_column_key in input_data:
+                input_data[city_column_key] = 1
+
+            prop_column_key = f"property_type_{selected_property_type}"
+            if prop_column_key in input_data:
+                input_data[prop_column_key] = 1
+
+            input_df = pd.DataFrame([input_data])[feature_columns]
+            predicted_raw = model.predict(input_df.values)
+            prediction_text = format_indian_currency(max(0, predicted_raw[0]))
+        except Exception as e:
+            print(f"Error handling prediction submission: {e}")
+
+    return render_template_string(
+        HTML_TEMPLATE,
+        cities_list=cities_pool,
+        property_types_list=property_types_pool,
+        selected_city=selected_city,
+        selected_property_type=selected_property_type,
+        prediction_text=prediction_text,
+        sqft=sqft,
+        bhk=bhk,
+        bathrooms=bathrooms,
+    )
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000, debug=True)
